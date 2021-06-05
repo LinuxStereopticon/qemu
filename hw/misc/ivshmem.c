@@ -66,9 +66,11 @@ DECLARE_INSTANCE_CHECKER(IVShmemState, IVSHMEM_COMMON,
 DECLARE_INSTANCE_CHECKER(IVShmemState, IVSHMEM_PLAIN,
                          TYPE_IVSHMEM_PLAIN)
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
 #define TYPE_IVSHMEM_DOORBELL "ivshmem-doorbell"
 DECLARE_INSTANCE_CHECKER(IVShmemState, IVSHMEM_DOORBELL,
                          TYPE_IVSHMEM_DOORBELL)
+#endif
 
 #define TYPE_IVSHMEM "ivshmem"
 DECLARE_INSTANCE_CHECKER(IVShmemState, IVSHMEM,
@@ -124,7 +126,9 @@ enum ivshmem_registers {
     INTRMASK = 0,
     INTRSTATUS = 4,
     IVPOSITION = 8,
+#ifdef CONFIG_IVSHMEM_DOORBELL
     DOORBELL = 12,
+#endif
 };
 
 static inline uint32_t ivshmem_has_feature(IVShmemState *ivs,
@@ -190,6 +194,7 @@ static void ivshmem_io_write(void *opaque, hwaddr addr,
             ivshmem_IntrStatus_write(s, val);
             break;
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
         case DOORBELL:
             /* check that dest VM ID is reasonable */
             if (dest >= s->nb_peers) {
@@ -206,6 +211,7 @@ static void ivshmem_io_write(void *opaque, hwaddr addr,
                                 vector, dest);
             }
             break;
+#endif
         default:
             IVSHMEM_DPRINTF("Unhandled write " TARGET_FMT_plx "\n", addr);
     }
@@ -348,6 +354,7 @@ static void ivshmem_vector_poll(PCIDevice *dev,
     }
 }
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
 static void watch_vector_notifier(IVShmemState *s, EventNotifier *n,
                                  int vector)
 {
@@ -419,6 +426,7 @@ static void resize_peers(IVShmemState *s, int nb_peers)
         s->peers[i].nb_eventfds = 0;
     }
 }
+#endif
 
 static void ivshmem_add_kvm_msi_virq(IVShmemState *s, int vector,
                                      Error **errp)
@@ -450,8 +458,10 @@ static void setup_interrupt(IVShmemState *s, int vector, Error **errp)
     IVSHMEM_DPRINTF("setting up interrupt for vector: %d\n", vector);
 
     if (!with_irqfd) {
+#ifdef CONFIG_IVSHMEM_DOORBELL
         IVSHMEM_DPRINTF("with eventfd\n");
         watch_vector_notifier(s, n, vector);
+#endif
     } else if (msix_enabled(pdev)) {
         IVSHMEM_DPRINTF("with irqfd\n");
         ivshmem_add_kvm_msi_virq(s, vector, &err);
@@ -471,6 +481,7 @@ static void setup_interrupt(IVShmemState *s, int vector, Error **errp)
     }
 }
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
 static void process_msg_shmem(IVShmemState *s, int fd, Error **errp)
 {
     Error *local_err = NULL;
@@ -696,6 +707,7 @@ static void ivshmem_recv_setup(IVShmemState *s, Error **errp)
      */
     assert(s->ivshmem_bar2);
 }
+#endif
 
 /* Select the MSI-X vectors used by device.
  * ivshmem maps events to vectors statically, so
@@ -710,13 +722,17 @@ static void ivshmem_msix_vector_use(IVShmemState *s)
     }
 }
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
 static void ivshmem_disable_irqfd(IVShmemState *s);
+#endif
 
 static void ivshmem_reset(DeviceState *d)
 {
     IVShmemState *s = IVSHMEM_COMMON(d);
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
     ivshmem_disable_irqfd(s);
+#endif
 
     s->intrstatus = 0;
     s->intrmask = 0;
@@ -730,6 +746,7 @@ static int ivshmem_setup_interrupts(IVShmemState *s, Error **errp)
     /* allocate QEMU callback data for receiving interrupts */
     s->msi_vectors = g_malloc0(s->vectors * sizeof(MSIVector));
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
     if (ivshmem_has_feature(s, IVSHMEM_MSI)) {
         if (msix_init_exclusive_bar(PCI_DEVICE(s), s->vectors, 1, errp)) {
             return -1;
@@ -738,6 +755,7 @@ static int ivshmem_setup_interrupts(IVShmemState *s, Error **errp)
         IVSHMEM_DPRINTF("msix initialized (%d vectors)\n", s->vectors);
         ivshmem_msix_vector_use(s);
     }
+#endif
 
     return 0;
 }
@@ -756,6 +774,7 @@ static void ivshmem_remove_kvm_msi_virq(IVShmemState *s, int vector)
     s->msi_vectors[vector].pdev = NULL;
 }
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
 static void ivshmem_enable_irqfd(IVShmemState *s)
 {
     PCIDevice *pdev = PCI_DEVICE(s);
@@ -810,6 +829,7 @@ static void ivshmem_disable_irqfd(IVShmemState *s)
     }
 
 }
+#endif
 
 static void ivshmem_write_config(PCIDevice *pdev, uint32_t address,
                                  uint32_t val, int len)
@@ -818,6 +838,8 @@ static void ivshmem_write_config(PCIDevice *pdev, uint32_t address,
     int is_enabled, was_enabled = msix_enabled(pdev);
 
     pci_default_write_config(pdev, address, val, len);
+
+#ifdef CONFIG_IVSHMEM_DOORBELL
     is_enabled = msix_enabled(pdev);
 
     if (kvm_msi_via_irqfd_enabled()) {
@@ -827,6 +849,7 @@ static void ivshmem_write_config(PCIDevice *pdev, uint32_t address,
             ivshmem_disable_irqfd(s);
         }
     }
+#endif
 }
 
 static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
@@ -835,12 +858,14 @@ static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
     Error *err = NULL;
     uint8_t *pci_conf;
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
     /* IRQFD requires MSI */
     if (ivshmem_has_feature(s, IVSHMEM_IOEVENTFD) &&
         !ivshmem_has_feature(s, IVSHMEM_MSI)) {
         error_setg(errp, "ioeventfd/irqfd requires MSI");
         return;
     }
+#endif
 
     pci_conf = dev->config;
     pci_conf[PCI_COMMAND] = PCI_COMMAND_IO | PCI_COMMAND_MEMORY;
@@ -848,16 +873,20 @@ static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
     memory_region_init_io(&s->ivshmem_mmio, OBJECT(s), &ivshmem_mmio_ops, s,
                           "ivshmem-mmio", IVSHMEM_REG_BAR_SIZE);
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
     /* region for registers*/
     pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
                      &s->ivshmem_mmio);
+#endif
 
     if (s->hostmem != NULL) {
         IVSHMEM_DPRINTF("using hostmem\n");
 
         s->ivshmem_bar2 = host_memory_backend_get_memory(s->hostmem);
         host_memory_backend_set_mapped(s->hostmem, true);
-    } else {
+    }
+#ifdef CONFIG_IVSHMEM_DOORBELL
+    else {
         Chardev *chr = qemu_chr_fe_get_driver(&s->server_chr);
         assert(chr);
 
@@ -892,6 +921,7 @@ static void ivshmem_common_realize(PCIDevice *dev, Error **errp)
             return;
         }
     }
+#endif
 
     if (s->master == ON_OFF_AUTO_AUTO) {
         s->master = s->vm_id == 0 ? ON_OFF_AUTO_ON : ON_OFF_AUTO_OFF;
@@ -945,6 +975,7 @@ static void ivshmem_exit(PCIDevice *dev)
         host_memory_backend_set_mapped(s->hostmem, false);
     }
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
     if (s->peers) {
         for (i = 0; i < s->nb_peers; i++) {
             close_peer_eventfds(s, i);
@@ -955,6 +986,7 @@ static void ivshmem_exit(PCIDevice *dev)
     if (ivshmem_has_feature(s, IVSHMEM_MSI)) {
         msix_uninit_exclusive_bar(dev);
     }
+#endif
 
     g_free(s->msi_vectors);
 }
@@ -1064,6 +1096,7 @@ static const TypeInfo ivshmem_plain_info = {
     .class_init    = ivshmem_plain_class_init,
 };
 
+#ifdef CONFIG_IVSHMEM_DOORBELL
 static const VMStateDescription ivshmem_doorbell_vmsd = {
     .name = TYPE_IVSHMEM_DOORBELL,
     .version_id = 0,
@@ -1124,12 +1157,15 @@ static const TypeInfo ivshmem_doorbell_info = {
     .instance_init = ivshmem_doorbell_init,
     .class_init    = ivshmem_doorbell_class_init,
 };
+#endif
 
 static void ivshmem_register_types(void)
 {
     type_register_static(&ivshmem_common_info);
     type_register_static(&ivshmem_plain_info);
+#ifdef CONFIG_IVSHMEM_DOORBELL
     type_register_static(&ivshmem_doorbell_info);
+#endif
 }
 
 type_init(ivshmem_register_types)
