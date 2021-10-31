@@ -1519,11 +1519,13 @@ if link_language == 'cpp'
   }
 endif
 
-have_ivshmem = config_host_data.get('CONFIG_EVENTFD')
+have_ivshmem = targetos == 'linux' or targetos == 'darwin'
+have_ivshmem_doorbell = config_host_data.get('CONFIG_EVENTFD')
 host_kconfig = \
   ('CONFIG_TPM' in config_host ? ['CONFIG_TPM=y'] : []) + \
   ('CONFIG_SPICE' in config_host ? ['CONFIG_SPICE=y'] : []) + \
   (have_ivshmem ? ['CONFIG_IVSHMEM=y'] : []) + \
+  (have_ivshmem_doorbell ? ['CONFIG_IVSHMEM_DOORBELL=y'] : []) + \
   ('CONFIG_OPENGL' in config_host ? ['CONFIG_OPENGL=y'] : []) + \
   (x11.found() ? ['CONFIG_X11=y'] : []) + \
   ('CONFIG_VHOST_USER' in config_host ? ['CONFIG_VHOST_USER=y'] : []) + \
@@ -2780,7 +2782,7 @@ if have_tools
                install: true)
   endif
 
-  if have_ivshmem
+  if have_ivshmem_doorbell
     subdir('contrib/ivshmem-client')
     subdir('contrib/ivshmem-server')
   endif
